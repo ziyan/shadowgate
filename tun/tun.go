@@ -37,26 +37,20 @@ func Open(name string, persist bool) (TUN, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if file != nil {
-			file.Close()
-			file = nil
-		}
-	}()
 
-	name, err = createInterface(file.Fd(), name, 0x0001|0x1000)
+	name, err = createInterface(file.Fd(), name)
 	if err != nil {
+		file.Close()
 		return nil, err
 	}
 
 	if err := setInterfacePersist(file.Fd(), persist); err != nil {
+		file.Close()
 		return nil, err
 	}
 
-	t := &tun{
+	return &tun{
 		file: file,
 		name: name,
-	}
-	file = nil
-	return t, nil
+	}, nil
 }

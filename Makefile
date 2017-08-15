@@ -22,4 +22,4 @@ save:
 
 .PHONY: format
 format:
-	gofmt -l -w utils
+	gofmt -l -w cli secure compress ipv4 tun

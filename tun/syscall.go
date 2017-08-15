@@ -15,14 +15,14 @@ func ioctl(fd uintptr, request int, argp uintptr) error {
 	return nil
 }
 
-func createInterface(fd uintptr, name string, flags uint16) (string, error) {
+func createInterface(fd uintptr, name string) (string, error) {
 	data := &struct {
 		Name  [0x10]byte
 		Flags uint16
 		pad   [0x28 - 0x10 - 2]byte
 	}{}
 
-	data.Flags = flags
+	data.Flags = 0x0001 | 0x1000
 	copy(data.Name[:], name)
 
 	if err := ioctl(fd, syscall.TUNSETIFF, uintptr(unsafe.Pointer(data))); err != nil {
