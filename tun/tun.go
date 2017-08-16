@@ -12,17 +12,17 @@ var log = logging.MustGetLogger("ipv6")
 type TUN interface {
 	io.ReadWriteCloser
 
-	Name() string
+	Interface() string
 }
 
 type tun struct {
 	file    *os.File
-	name    string
+	ifname  string
 	persist bool
 }
 
-func (t *tun) Name() string {
-	return t.name
+func (t *tun) Interface() string {
+	return t.ifname
 }
 
 func (t *tun) Read(p []byte) (int, error) {
@@ -36,13 +36,13 @@ func (t *tun) Write(p []byte) (int, error) {
 func (t *tun) Close() error {
 	return t.file.Close()
 }
-func Open(name string, persist bool) (TUN, error) {
+func Open(ifname string, persist bool) (TUN, error) {
 	file, err := os.OpenFile("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
 		return nil, err
 	}
 
-	name, err = createInterface(file.Fd(), name)
+	ifname, err = createInterface(file.Fd(), ifname)
 	if err != nil {
 		file.Close()
 		return nil, err
@@ -54,7 +54,7 @@ func Open(name string, persist bool) (TUN, error) {
 	}
 
 	return &tun{
-		file: file,
-		name: name,
+		file:   file,
+		ifname: ifname,
 	}, nil
 }

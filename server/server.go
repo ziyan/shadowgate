@@ -38,17 +38,19 @@ type Server struct {
 	done chan struct{}
 }
 
-func NewServer(name string, persist bool, ip net.IP, network *net.IPNet, listen string, password []byte, timeout time.Duration) (*Server, error) {
+func NewServer(ifname string, persist bool, ip net.IP, network *net.IPNet, listen string, password []byte, timeout time.Duration) (*Server, error) {
 	listener, err := net.Listen("tcp", listen)
 	if err != nil {
 		return nil, err
 	}
 
-	tun, err := tun.Open(name, persist)
+	tun, err := tun.Open(ifname, persist)
 	if err != nil {
 		listener.Close()
 		return nil, err
 	}
+
+	log.Noticef("tun interface created: %s", tun.Interface())
 
 	return &Server{
 		ip:       ip,
@@ -70,8 +72,8 @@ func (s *Server) Close() error {
 	return nil
 }
 
-func (s *Server) Name() string {
-	return s.tun.Name()
+func (s *Server) Interface() string {
+	return s.tun.Interface()
 }
 
 func (s *Server) Run(signaling chan os.Signal) error {

@@ -28,17 +28,19 @@ type Client struct {
 	remote chan ipv4.Frame
 }
 
-func NewClient(name string, persist bool, ip net.IP, network *net.IPNet, connect string, password []byte, timeout time.Duration) (*Client, error) {
+func NewClient(ifname string, persist bool, ip net.IP, network *net.IPNet, connect string, password []byte, timeout time.Duration) (*Client, error) {
 	conn, err := net.DialTimeout("tcp", connect, timeout)
 	if err != nil {
 		return nil, err
 	}
 
-	tun, err := tun.Open(name, persist)
+	tun, err := tun.Open(ifname, persist)
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
+
+	log.Noticef("tun interface created: %s", tun.Interface())
 
 	return &Client{
 		ip:      ip,
@@ -56,8 +58,8 @@ func (c *Client) Close() error {
 	return nil
 }
 
-func (c *Client) Name() string {
-	return c.tun.Name()
+func (c *Client) Interface() string {
+	return c.tun.Interface()
 }
 
 func (c *Client) Run(signaling chan os.Signal) error {

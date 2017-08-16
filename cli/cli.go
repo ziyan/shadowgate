@@ -52,7 +52,7 @@ func Run(args []string) {
 			Usage: "Run in server mode",
 			Flags: []cli.Flag{
 				cli.StringFlag{
-					Name: "name",
+					Name: "ifname",
 				},
 				cli.BoolFlag{
 					Name: "persist",
@@ -87,7 +87,7 @@ func Run(args []string) {
 					return err
 				}
 
-				server, err := server.NewServer(c.String("name"), c.Bool("persist"), ip, network, c.String("listen"), []byte(c.String("password")), timeout)
+				server, err := server.NewServer(c.String("ifname"), c.Bool("persist"), ip, network, c.String("listen"), []byte(c.String("password")), timeout)
 				if err != nil {
 					log.Errorf("failed to start server: %s", err)
 					return err
@@ -96,11 +96,11 @@ func Run(args []string) {
 
 				// setup the interface
 				ipnet := &net.IPNet{ip, network.Mask}
-				if err := exec.Command("ip", "addr", "add", ipnet.String(), "dev", server.Name()).Run(); err != nil {
-					log.Warningf("failed to set addr on interface %s: %s", server.Name(), err)
+				if err := exec.Command("ip", "addr", "add", ipnet.String(), "dev", server.Interface()).Run(); err != nil {
+					log.Warningf("failed to set addr on interface %s: %s", server.Interface(), err)
 				}
-				if err := exec.Command("ip", "link", "set", "dev", server.Name(), "up").Run(); err != nil {
-					log.Warningf("failed to bring up interface %s: %s", server.Name(), err)
+				if err := exec.Command("ip", "link", "set", "dev", server.Interface(), "up").Run(); err != nil {
+					log.Warningf("failed to bring up interface %s: %s", server.Interface(), err)
 				}
 
 				signaling := make(chan os.Signal, 1)
@@ -113,7 +113,7 @@ func Run(args []string) {
 			Usage: "Run in client mode",
 			Flags: []cli.Flag{
 				cli.StringFlag{
-					Name: "name",
+					Name: "ifname",
 				},
 				cli.BoolFlag{
 					Name: "persist",
@@ -149,7 +149,7 @@ func Run(args []string) {
 					return err
 				}
 
-				client, err := client.NewClient(c.String("name"), c.Bool("persist"), ip, network, c.String("connect"), []byte(c.String("password")), timeout)
+				client, err := client.NewClient(c.String("ifname"), c.Bool("persist"), ip, network, c.String("connect"), []byte(c.String("password")), timeout)
 				if err != nil {
 					log.Errorf("failed to start client: %s", err)
 					return err
@@ -158,11 +158,11 @@ func Run(args []string) {
 
 				// setup the interface
 				ipnet := &net.IPNet{ip, network.Mask}
-				if err := exec.Command("ip", "addr", "add", ipnet.String(), "dev", client.Name()).Run(); err != nil {
-					log.Warningf("failed to set addr on interface %s: %s", client.Name(), err)
+				if err := exec.Command("ip", "addr", "add", ipnet.String(), "dev", client.Interface()).Run(); err != nil {
+					log.Warningf("failed to set addr on interface %s: %s", client.Interface(), err)
 				}
-				if err := exec.Command("ip", "link", "set", "dev", client.Name(), "up").Run(); err != nil {
-					log.Warningf("failed to bring up interface %s: %s", client.Name(), err)
+				if err := exec.Command("ip", "link", "set", "dev", client.Interface(), "up").Run(); err != nil {
+					log.Warningf("failed to bring up interface %s: %s", client.Interface(), err)
 				}
 
 				signaling := make(chan os.Signal, 1)
