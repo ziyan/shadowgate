@@ -26,8 +26,6 @@ type Client struct {
 
 	local  chan ipv4.Frame
 	remote chan ipv4.Frame
-
-	done chan struct{}
 }
 
 func NewClient(name string, persist bool, ip net.IP, network *net.IPNet, connect string, password []byte, timeout time.Duration) (*Client, error) {
@@ -47,14 +45,12 @@ func NewClient(name string, persist bool, ip net.IP, network *net.IPNet, connect
 		network: network,
 		tun:     tun,
 		conn:    compress.NewCompressedConnection(secure.NewEncryptedConnection(conn, password)),
-		local:   make(chan ipv4.Frame, 1),
-		remote:  make(chan ipv4.Frame, 1),
-		done:    make(chan struct{}),
+		local:   make(chan ipv4.Frame, 1024),
+		remote:  make(chan ipv4.Frame, 1024),
 	}, nil
 }
 
 func (c *Client) Close() error {
-	close(c.done)
 	c.tun.Close()
 	c.conn.Close()
 	return nil
@@ -78,22 +74,24 @@ func (c *Client) Run(signaling chan os.Signal) error {
 		close(done2)
 	}()
 
-	quit := false
-	for !quit {
-		select {
-		case <-signaling:
-			quit = true
-		case <-done1:
-			quit = true
-		case <-done2:
-			quit = true
-		}
+	select {
+	case <-signaling:
+	case <-done1:
+	case <-done2:
 	}
+
+	c.tun.Close()
+	c.conn.Close()
+
+	<-done1
+	<-done2
 	return nil
 }
 
 func (c *Client) run() {
-	defer c.tun.Close()
+	log.Infof("tun device opened")
+
+	done := make(chan struct{})
 
 	done1 := make(chan struct{})
 	go func() {
@@ -121,12 +119,13 @@ func (c *Client) run() {
 
 	done2 := make(chan struct{})
 	go func() {
-		for {
+		quit := false
+		for !quit {
 			select {
 			case frame := <-c.local:
 				c.tun.Write(frame)
-			case <-c.done:
-				break
+			case <-done:
+				quit = true
 			}
 		}
 		close(done2)
@@ -136,12 +135,20 @@ func (c *Client) run() {
 	case <-done1:
 	case <-done2:
 	}
+
+	close(done)
+	c.tun.Close()
+
+	<-done1
+	<-done2
+
+	log.Infof("tun device closed")
 }
 
 func (c *Client) connect() {
-	defer c.conn.Close()
+	log.Infof("server connection established")
 
-	log.Infof("server connected")
+	done := make(chan struct{})
 
 	done1 := make(chan struct{})
 	go func() {
@@ -170,17 +177,25 @@ func (c *Client) connect() {
 
 	done2 := make(chan struct{})
 	go func() {
-		for {
+		quit := false
+		for !quit {
 			select {
 			case frame := <-c.remote:
-				c.conn.Write(frame)
-			case <-c.done:
-				break
+				n, err := c.conn.Write(frame)
+				if err != nil {
+					log.Warningf("failed to write frame to server: %s", err)
+				} else if n != len(frame) {
+					panic("server: did not write complete frame")
+				}
+			case <-done:
+				quit = true
 			}
 		}
+
 		close(done2)
 	}()
 
+	// send a special frame to make initialization faster
 	c.remote <- ipv4.MakeFrame(c.ip, c.ip)
 
 	select {
@@ -188,5 +203,11 @@ func (c *Client) connect() {
 	case <-done2:
 	}
 
-	log.Infof("closing connection to server")
+	close(done)
+	c.conn.Close()
+
+	<-done1
+	<-done2
+
+	log.Infof("server connection closed")
 }

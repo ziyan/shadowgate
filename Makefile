@@ -12,14 +12,10 @@ shadowgate: $(shell find . -iname '*.go' -print)
 test: build
 	godep go test ./...
 
-.PHONY: docker
-docker: test
-	docker build -t ziyan/shadowgate .
-
 .PHONY: save
 save:
 	godep save ./...
 
 .PHONY: format
 format:
-	gofmt -l -w cli secure compress ipv4 tun server client
+	find . -iname '*.go' -type f -not -path './vendor/*' -print | xargs gofmt -w -l

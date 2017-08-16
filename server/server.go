@@ -5,7 +5,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/op/go-logging"
@@ -18,6 +17,11 @@ import (
 
 var log = logging.MustGetLogger("server")
 
+type registration struct {
+	channel chan ipv4.Frame
+	source  net.IP
+}
+
 type Server struct {
 	ip       net.IP
 	network  *net.IPNet
@@ -27,9 +31,9 @@ type Server struct {
 	tun      tun.TUN
 	listener net.Listener
 
-	local   chan ipv4.Frame
-	remotes map[string]chan ipv4.Frame
-	mutex   sync.Mutex
+	local    chan ipv4.Frame
+	queue    chan ipv4.Frame
+	register chan *registration
 
 	done chan struct{}
 }
@@ -53,14 +57,14 @@ func NewServer(name string, persist bool, ip net.IP, network *net.IPNet, listen 
 		timeout:  timeout,
 		tun:      tun,
 		listener: listener,
-		local:    make(chan ipv4.Frame, 1),
-		remotes:  make(map[string]chan ipv4.Frame),
+		local:    make(chan ipv4.Frame, 1024),
+		queue:    make(chan ipv4.Frame, 1024),
+		register: make(chan *registration, 1024),
 		done:     make(chan struct{}),
 	}, nil
 }
 
 func (s *Server) Close() error {
-	close(s.done)
 	s.tun.Close()
 	s.listener.Close()
 	return nil
@@ -84,22 +88,76 @@ func (s *Server) Run(signaling chan os.Signal) error {
 		close(done2)
 	}()
 
-	quit := false
-	for !quit {
-		select {
-		case <-signaling:
-			quit = true
-		case <-done1:
-			quit = true
-		case <-done2:
-			quit = true
-		}
+	done3 := make(chan struct{})
+	go func() {
+		s.route()
+		close(done3)
+	}()
+
+	select {
+	case <-signaling:
+	case <-done1:
+	case <-done2:
+	case <-done3:
 	}
+
+	s.tun.Close()
+	s.listener.Close()
+
+	<-done1
+	<-done2
+
+	close(s.done)
+	<-done3
+
 	return nil
 }
 
+func (s *Server) route() {
+	log.Infof("router started")
+
+	// routing table
+	routes := make(map[string]chan ipv4.Frame)
+
+	quit := false
+	for !quit {
+		select {
+		case f := <-s.queue:
+			if s.ip.Equal(f.Destination()) {
+				// route to local tun
+				s.local <- f
+			} else {
+				// find client queue
+				if c, ok := routes[f.Destination().String()]; ok {
+					c <- f
+				}
+			}
+		case r := <-s.register:
+			if r.source != nil {
+				// new route discovered
+				log.Infof("new route registered: %s", r.source)
+				routes[r.source.String()] = r.channel
+			} else {
+				// remove route that is gone
+				for s, c := range routes {
+					if c == r.channel {
+						log.Infof("old route removed: %s", s)
+						delete(routes, s)
+					}
+				}
+			}
+		case <-s.done:
+			quit = true
+		}
+	}
+
+	log.Infof("router stopped")
+}
+
 func (s *Server) run() {
-	defer s.tun.Close()
+	log.Infof("tun device opened")
+
+	done := make(chan struct{})
 
 	done1 := make(chan struct{})
 	go func() {
@@ -110,26 +168,17 @@ func (s *Server) run() {
 				log.Warningf("failed to get next frame: %s", err)
 				break
 			}
-			frame := ipv4.DecodeFrame(buffer[:n])
-			if frame == nil {
+			f := ipv4.DecodeFrame(buffer[:n])
+			if f == nil {
 				continue
 			}
-			if !s.ip.Equal(frame.Source()) || !s.network.Contains(frame.Destination()) || frame.Source().Equal(frame.Destination()) {
+			if !s.ip.Equal(f.Source()) || !s.network.Contains(f.Destination()) || f.Source().Equal(f.Destination()) {
 				continue
 			}
 
-			log.Debugf("tun: packet: %s -> %s, size %d", frame.Source(), frame.Destination(), len(frame.Payload()))
+			log.Debugf("tun: frame: %s -> %s, size %d", f.Source(), f.Destination(), len(f.Payload()))
 
-			// routing
-			var channel chan ipv4.Frame
-			s.mutex.Lock()
-			if c, ok := s.remotes[frame.Destination().String()]; ok {
-				channel = c
-			}
-			s.mutex.Unlock()
-			if channel != nil {
-				channel <- frame.Copy()
-			}
+			s.queue <- f.Copy()
 		}
 
 		close(done1)
@@ -137,14 +186,16 @@ func (s *Server) run() {
 
 	done2 := make(chan struct{})
 	go func() {
-		for {
+		quit := false
+		for !quit {
 			select {
-			case frame := <-s.local:
-				s.tun.Write(frame)
-			case <-s.done:
-				break
+			case f := <-s.local:
+				s.tun.Write(f)
+			case <-done:
+				quit = true
 			}
 		}
+
 		close(done2)
 	}()
 
@@ -152,6 +203,14 @@ func (s *Server) run() {
 	case <-done1:
 	case <-done2:
 	}
+
+	close(done)
+	s.tun.Close()
+
+	<-done1
+	<-done2
+
+	log.Infof("tun device closed")
 }
 
 func (s *Server) listen() {
@@ -169,82 +228,73 @@ func (s *Server) listen() {
 }
 
 func (s *Server) accept(addr net.Addr, conn io.ReadWriteCloser) {
-	defer conn.Close()
-	log.Infof("accepted connection in server mode from: %v", addr)
-
-	// source observed
-	var source net.IP
+	log.Infof("client connection established: %v", addr)
 
 	// create queue for this client
-	remote := make(chan ipv4.Frame, 1)
+	remote := make(chan ipv4.Frame, 1024)
 	defer func() {
-		s.mutex.Lock()
-		for ip, c := range s.remotes {
-			if c == remote {
-				delete(s.remotes, ip)
-			}
-		}
-		s.mutex.Unlock()
+		s.register <- &registration{channel: remote}
 		close(remote)
 	}()
 
+	done := make(chan struct{})
+
 	done1 := make(chan struct{})
 	go func() {
+		// source observed
+		var source net.IP
+
 		scanner := bufio.NewScanner(conn)
 		scanner.Split(ipv4.ScanFrame)
 
 		for scanner.Scan() {
-			frame := ipv4.Frame(scanner.Bytes())
-			if s.ip.Equal(frame.Source()) || !s.network.Contains(frame.Source()) || !s.network.Contains(frame.Destination()) {
+			f := ipv4.Frame(scanner.Bytes())
+			if s.ip.Equal(f.Source()) || !s.network.Contains(f.Source()) || !s.network.Contains(f.Destination()) {
 				continue
 			}
 
-			if !source.Equal(frame.Source()) {
-				source = frame.Source()
-				s.mutex.Lock()
-				s.remotes[source.String()] = remote
-				s.mutex.Unlock()
+			if !source.Equal(f.Source()) {
+				source = f.Source()
+				s.register <- &registration{channel: remote, source: source}
 			}
 
-			if frame.Source().Equal(frame.Destination()) {
+			if f.Source().Equal(f.Destination()) {
+				// received a special f from client, reply with a special f
 				remote <- ipv4.MakeFrame(s.ip, s.ip)
 				continue
 			}
 
-			log.Debugf("tcp: packet: %s -> %s, size %d", frame.Source(), frame.Destination(), len(frame.Payload()))
+			log.Debugf("tcp: frame: %s -> %s, size %d", f.Source(), f.Destination(), len(f.Payload()))
 
-			if s.ip.Equal(frame.Destination()) {
-				s.local <- frame.Copy()
-			} else {
-				var channel chan ipv4.Frame
-				s.mutex.Lock()
-				if c, ok := s.remotes[frame.Destination().String()]; ok {
-					channel = c
-				}
-				s.mutex.Unlock()
-				if channel != nil {
-					channel <- frame.Copy()
-				}
-			}
+			s.queue <- f.Copy()
 		}
 
 		if err := scanner.Err(); err != nil {
 			log.Warningf("failed to get next frame: %s", err)
 		}
 
+		log.Infof("client connection receiver stopped: %s", addr)
 		close(done1)
 	}()
 
 	done2 := make(chan struct{})
 	go func() {
-		for {
+		quit := false
+		for !quit {
 			select {
-			case frame := <-remote:
-				conn.Write(frame)
-			case <-s.done:
-				break
+			case f := <-remote:
+				n, err := conn.Write(f)
+				if err != nil {
+					log.Warningf("failed to write frame to client %s: %s", addr, err)
+				} else if n != len(f) {
+					panic("server: did not write complete frame")
+				}
+			case <-done:
+				quit = true
 			}
 		}
+
+		log.Infof("client connection sender stopped: %s", addr)
 		close(done2)
 	}()
 
@@ -253,5 +303,11 @@ func (s *Server) accept(addr net.Addr, conn io.ReadWriteCloser) {
 	case <-done2:
 	}
 
-	log.Infof("closing client connection from: %s", addr)
+	close(done)
+	conn.Close()
+
+	<-done1
+	<-done2
+
+	log.Infof("client connection closed: %s", addr)
 }

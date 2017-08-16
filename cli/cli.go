@@ -52,8 +52,7 @@ func Run(args []string) {
 			Usage: "Run in server mode",
 			Flags: []cli.Flag{
 				cli.StringFlag{
-					Name:  "name",
-					Value: "sg0",
+					Name: "name",
 				},
 				cli.BoolFlag{
 					Name: "persist",
@@ -114,8 +113,7 @@ func Run(args []string) {
 			Usage: "Run in client mode",
 			Flags: []cli.Flag{
 				cli.StringFlag{
-					Name:  "name",
-					Value: "sg0",
+					Name: "name",
 				},
 				cli.BoolFlag{
 					Name: "persist",
