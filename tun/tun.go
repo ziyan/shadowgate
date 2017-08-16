@@ -3,7 +3,11 @@ package tun
 import (
 	"io"
 	"os"
+
+	"github.com/op/go-logging"
 )
+
+var log = logging.MustGetLogger("ipv6")
 
 type TUN interface {
 	io.ReadWriteCloser
