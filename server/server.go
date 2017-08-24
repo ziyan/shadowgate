@@ -125,14 +125,17 @@ func (s *Server) route() {
 	for !quit {
 		select {
 		case f := <-s.queue:
-			if s.ip.Equal(f.Destination()) {
-				// route to local tun
-				s.local <- f
-			} else {
-				// find client queue
-				if c, ok := routes[f.Destination().String()]; ok {
+			if s.network.Contains(f.Destination()) {
+				if s.ip.Equal(f.Destination()) {
+					// route to local tun
+					s.local <- f
+				} else if c, ok := routes[f.Destination().String()]; ok {
+					// find client queue
 					c <- f
 				}
+			} else {
+				// route to local tun
+				s.local <- f
 			}
 		case r := <-s.register:
 			if r.source != nil {
@@ -174,7 +177,8 @@ func (s *Server) run() {
 			if f == nil {
 				continue
 			}
-			if !s.ip.Equal(f.Source()) || !s.network.Contains(f.Destination()) || f.Source().Equal(f.Destination()) {
+			if !s.network.Contains(f.Destination()) || f.Source().Equal(f.Destination()) {
+				log.Warningf("tun: dropped: %s -> %s, size %d", f.Source(), f.Destination(), len(f.Payload()))
 				continue
 			}
 
@@ -251,7 +255,7 @@ func (s *Server) accept(addr net.Addr, conn io.ReadWriteCloser) {
 
 		for scanner.Scan() {
 			f := ipv4.Frame(scanner.Bytes())
-			if s.ip.Equal(f.Source()) || !s.network.Contains(f.Source()) || !s.network.Contains(f.Destination()) {
+			if s.ip.Equal(f.Source()) || !s.network.Contains(f.Source()) {
 				continue
 			}
 

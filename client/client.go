@@ -108,7 +108,8 @@ func (c *Client) run() {
 			if frame == nil {
 				continue
 			}
-			if !c.ip.Equal(frame.Source()) || !c.network.Contains(frame.Destination()) || frame.Source().Equal(frame.Destination()) {
+			if !c.ip.Equal(frame.Source()) || frame.Source().Equal(frame.Destination()) {
+				log.Warningf("tun: dropped: %s -> %s, size %d", frame.Source(), frame.Destination(), len(frame.Payload()))
 				continue
 			}
 
@@ -159,7 +160,7 @@ func (c *Client) connect() {
 
 		for scanner.Scan() {
 			frame := ipv4.Frame(scanner.Bytes())
-			if !c.ip.Equal(frame.Destination()) || !c.network.Contains(frame.Source()) {
+			if !c.ip.Equal(frame.Destination()) {
 				continue
 			}
 			if frame.Source().Equal(frame.Destination()) {

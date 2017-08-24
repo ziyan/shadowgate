@@ -19,3 +19,9 @@ save:
 .PHONY: format
 format:
 	find . -iname '*.go' -type f -not -path './vendor/*' -print | xargs gofmt -w -l
+
+.PHONY: docker
+docker: test
+	docker build -t ziyan/shadowgate .
+
+
