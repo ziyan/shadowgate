@@ -5,16 +5,12 @@ all: build
 build: shadowgate
 
 shadowgate: $(shell find . -iname '*.go' -print)
-	CGO_ENABLED=0 godep go build github.com/ziyan/shadowgate
+	CGO_ENABLED=0 go build github.com/ziyan/shadowgate
 	objcopy --strip-all shadowgate
 
 .PHONY: test
 test: build
-	godep go test ./...
-
-.PHONY: save
-save:
-	godep save ./...
+	go test ./...
 
 .PHONY: format
 format:
