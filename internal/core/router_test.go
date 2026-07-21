@@ -37,7 +37,7 @@ func TestRouterRegisterEnsureUnregister(t *testing.T) {
 		t.Fatalf("ParseCIDR: %s", err)
 	}
 
-	router := NewRouter(device, serverIP, network)
+	router := NewRouter(device, serverIP, network, nil)
 	router.Start()
 	defer router.Stop()
 
@@ -84,7 +84,7 @@ func TestRouterBoundsRoutesPerSink(t *testing.T) {
 	device := tuntest.New()
 	serverIP := net.ParseIP("172.18.0.1")
 	_, network, _ := net.ParseCIDR("172.18.0.0/24")
-	router := NewRouter(device, serverIP, network)
+	router := NewRouter(device, serverIP, network, nil)
 
 	// A single client that sources far more addresses than the cap must not grow
 	// the table past the per-sink limit.
@@ -115,13 +115,100 @@ func TestRouterBoundsRoutesPerSink(t *testing.T) {
 	}
 }
 
+func TestRouterForwardToClientEgress(t *testing.T) {
+	device := tuntest.New()
+	serverIP := net.ParseIP("172.18.0.1")
+	clientIP := net.ParseIP("172.18.0.2")
+	gatewayIP := net.ParseIP("172.18.0.9")
+	external := net.ParseIP("1.1.1.1")
+	_, network, _ := net.ParseCIDR("172.18.0.0/24")
+
+	// A direct route wins over the resolver and the gateway.
+	router := NewRouter(device, serverIP, network, gatewayIP)
+	router.resolver = newNextHopResolver(func(source, destination net.IP) net.IP {
+		t.Errorf("resolver consulted for a directly-routed destination")
+		return nil
+	})
+	direct := &recordingSink{}
+	router.Register(clientIP, direct)
+	router.forwardToClient(ipv4.MakeFrame(serverIP, clientIP))
+	if direct.received() != 1 {
+		t.Fatalf("direct route: sink received %d, want 1", direct.received())
+	}
+
+	// The host's next hop toward an external destination is a connected client, so
+	// egress is forwarded there.
+	router = NewRouter(device, serverIP, network, nil)
+	router.resolver = newNextHopResolver(func(source, destination net.IP) net.IP {
+		if !destination.Equal(external) {
+			t.Errorf("resolver asked for %s, want %s", destination, external)
+		}
+		return clientIP
+	})
+	nextHop := &recordingSink{}
+	router.Register(clientIP, nextHop)
+	router.forwardToClient(ipv4.MakeFrame(serverIP, external))
+	if nextHop.received() != 1 {
+		t.Fatalf("resolved next hop: sink received %d, want 1", nextHop.received())
+	}
+
+	// With no direct route and no resolvable next hop, the configured gateway
+	// client carries the frame.
+	router = NewRouter(device, serverIP, network, gatewayIP)
+	router.resolver = newNextHopResolver(func(source, destination net.IP) net.IP { return nil })
+	gateway := &recordingSink{}
+	router.Register(gatewayIP, gateway)
+	router.forwardToClient(ipv4.MakeFrame(serverIP, external))
+	if gateway.received() != 1 {
+		t.Fatalf("gateway fallback: sink received %d, want 1", gateway.received())
+	}
+
+	// With nothing to match, the frame is dropped (no panic, no loop back to tun).
+	router = NewRouter(device, serverIP, network, nil)
+	router.resolver = newNextHopResolver(func(source, destination net.IP) net.IP { return nil })
+	router.forwardToClient(ipv4.MakeFrame(serverIP, external))
+}
+
+func TestNextHopResolverCaches(t *testing.T) {
+	source := net.ParseIP("10.9.0.1")
+	destination := net.ParseIP("1.1.1.1")
+	nextHop := net.ParseIP("172.18.0.2")
+
+	calls := 0
+	resolver := newNextHopResolver(func(source, destination net.IP) net.IP {
+		calls++
+		return nextHop
+	})
+	now := time.Unix(0, 0)
+	resolver.now = func() time.Time { return now }
+
+	if got := resolver.resolve(source, destination); !got.Equal(nextHop) {
+		t.Fatalf("resolve returned %s, want %s", got, nextHop)
+	}
+	if got := resolver.resolve(source, destination); !got.Equal(nextHop) {
+		t.Fatalf("second resolve returned %s, want %s", got, nextHop)
+	}
+	if calls != 1 {
+		t.Fatalf("lookup called %d times, want 1 (result should be cached)", calls)
+	}
+
+	// Past the TTL, the lookup is consulted again.
+	now = now.Add(nextHopTtl + time.Second)
+	if got := resolver.resolve(source, destination); !got.Equal(nextHop) {
+		t.Fatalf("post-expiry resolve returned %s, want %s", got, nextHop)
+	}
+	if calls != 2 {
+		t.Fatalf("lookup called %d times after expiry, want 2", calls)
+	}
+}
+
 func TestRouterDeliversLocal(t *testing.T) {
 	device := tuntest.New()
 	serverIP := net.ParseIP("172.18.0.1")
 	clientIP := net.ParseIP("172.18.0.2")
 	_, network, _ := net.ParseCIDR("172.18.0.0/24")
 
-	router := NewRouter(device, serverIP, network)
+	router := NewRouter(device, serverIP, network, nil)
 	router.Start()
 	defer router.Stop()
 

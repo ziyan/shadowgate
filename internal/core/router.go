@@ -40,6 +40,14 @@ type Router struct {
 	network *net.IPNet
 	device  tun.TUN
 
+	// gateway is the tunnel address of a client to which frames read from the tun
+	// with no other route are sent (the --gateway fallback). It may be nil.
+	gateway net.IP
+
+	// resolver maps a frame's destination to the connected client the host's own
+	// routing table would forward it through.
+	resolver *nextHopResolver
+
 	mutex  sync.Mutex
 	routes map[string]Sink
 	// sinkKeys is the reverse index (sink -> its route keys), used to bound and
@@ -52,11 +60,16 @@ type Router struct {
 	group sync.WaitGroup
 }
 
-func NewRouter(device tun.TUN, ip net.IP, network *net.IPNet) *Router {
+// NewRouter creates a router for the given tun device and tunnel subnet. gateway,
+// if non-nil, is the tunnel address of a client that receives frames read from
+// the tun with no other route.
+func NewRouter(device tun.TUN, ip net.IP, network *net.IPNet, gateway net.IP) *Router {
 	return &Router{
 		ip:       ip,
 		network:  network,
 		device:   device,
+		gateway:  gateway,
+		resolver: newNextHopResolver(netlinkNextHop),
 		routes:   make(map[string]Sink),
 		sinkKeys: make(map[Sink]map[string]struct{}),
 		toTun:    make(chan ipv4.Frame, 1024),
@@ -220,11 +233,28 @@ func (self *Router) Inbound(frame ipv4.Frame) {
 }
 
 // forwardToClient routes a frame read from the server's OWN tun toward the
-// connected client that owns its destination. A destination with no registered
-// route is dropped rather than written back to the tun (which would loop).
+// connected client that should carry it. It tries, in order: a client that owns
+// the destination directly; the client that is the host's own next hop toward
+// the destination (so a route such as "default via <client> dev <tun>" makes
+// egress through a client work); and the configured --gateway client. A frame
+// with no match is dropped rather than written back to the tun (which would
+// loop).
 func (self *Router) forwardToClient(frame ipv4.Frame) {
-	if sink, ok := self.sink(frame.Destination().String()); ok {
+	destination := frame.Destination()
+	if sink, ok := self.sink(destination.String()); ok {
 		sink.Send(frame)
+		return
+	}
+	if nextHop := self.resolver.resolve(frame.Source(), destination); nextHop != nil {
+		if sink, ok := self.sink(nextHop.String()); ok {
+			sink.Send(frame)
+			return
+		}
+	}
+	if self.gateway != nil {
+		if sink, ok := self.sink(self.gateway.String()); ok {
+			sink.Send(frame)
+		}
 	}
 }
 

@@ -125,6 +125,7 @@ Global:
 | `--compress`             | `false`                           | TCP: Snappy-compress the stream                 |
 | `--padding`              | `256`                             | UDP: max random padding bytes per datagram      |
 | `--mtu`                  | `0` (kernel default)              | TUN interface MTU; lower it to avoid UDP fragmentation |
+| `--gateway`              | *(server only; unset)*            | Tunnel address of a client to route otherwise-unroutable egress through |
 | `--ifname`               | *(kernel-assigned)*               | TUN interface name to create                    |
 | `--persist`              | `false`                           | Keep the TUN interface after exit               |
 | `--timeout`              | `2s`                              | Dial / network operation timeout                |
@@ -144,6 +145,29 @@ Because each datagram adds ~54 bytes of AEAD overhead plus up to `--padding`
 bytes, a full-size (1500-byte) tunnel packet can exceed the path MTU and
 fragment. Set `--mtu` below `path-MTU − 54 − padding` (for example `--mtu 1150`
 with the default padding on a 1500-byte path) so datagrams fit in one packet.
+
+### Routing egress through a client
+
+The server forwards a frame read from its own tun to a connected client in three
+steps, stopping at the first match: a client whose tunnel address **is** the
+destination; the client that the server host's **own routing table** names as the
+next hop toward the destination (so a route such as
+`ip route add default via 172.18.0.2 dev sg0` on the server sends its egress
+through that client); and finally the `--gateway` client, if configured. A frame
+that matches none is dropped rather than looped back to the tun.
+
+The routing-table step honors policy routing (it queries the kernel with the
+frame's own source address), so a rule like `from 10.9.0.0/24 lookup wgexit` is
+respected. The client at the far end must forward and NAT the traffic itself —
+for example:
+
+```bash
+sysctl -w net.ipv4.ip_forward=1
+iptables -t nat -A POSTROUTING -s 172.18.0.0/24 -o eth0 -j MASQUERADE
+```
+
+Use `--gateway <client-tunnel-ip>` when you want a fixed fallback client for any
+destination the server host has no explicit route for.
 
 ### Running in Docker
 

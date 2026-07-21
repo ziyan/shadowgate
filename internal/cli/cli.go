@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -91,6 +92,7 @@ func serverCommand() *cli.Command {
 		Flags: append(commonFlags(),
 			&cli.StringFlag{Name: "ip", Value: "172.18.0.1/24", Usage: "tunnel address in CIDR notation"},
 			&cli.StringFlag{Name: "listen", Value: ":3389", Usage: "address (TCP and UDP) to listen on"},
+			&cli.StringFlag{Name: "gateway", Usage: "tunnel address of a connected client to route otherwise-unroutable egress through (fallback when the host routing table has no next hop)"},
 		),
 		Action: func(ctx context.Context, command *cli.Command) error {
 			ip, network, timeout, err := parseCommon(command)
@@ -153,12 +155,20 @@ func newServer(command *cli.Command, ip net.IP, network *net.IPNet, timeout time
 		return nil, err
 	}
 	listen := command.String("listen")
+	var gateway net.IP
+	if raw := command.String("gateway"); raw != "" {
+		gateway = net.ParseIP(raw)
+		if gateway == nil {
+			return nil, fmt.Errorf("cli: invalid gateway address: %q", raw)
+		}
+	}
 	config := server.Config{
 		TCPListen: listen,
 		UDPListen: listen,
 		Password:  []byte(command.String("password")),
 		Compress:  command.Bool("compress"),
 		Padding:   command.Int("padding"),
+		Gateway:   gateway,
 		Timeout:   timeout,
 	}
 	runner, err := server.NewServer(device, ip, network, config)

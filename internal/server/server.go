@@ -25,8 +25,9 @@ type Config struct {
 	TCPListen string // TCP listen address; empty disables TCP
 	UDPListen string // UDP listen address; empty disables UDP
 	Password  []byte
-	Compress  bool // TCP: Snappy-compress the stream
-	Padding   int  // UDP: maximum random padding bytes per datagram
+	Compress  bool   // TCP: Snappy-compress the stream
+	Padding   int    // UDP: maximum random padding bytes per datagram
+	Gateway   net.IP // client tunnel address to route otherwise-unroutable egress through; nil disables
 	Timeout   time.Duration
 }
 
@@ -43,7 +44,7 @@ func NewServer(device tun.TUN, ip net.IP, network *net.IPNet, config Config) (*S
 		return nil, errors.New("server: no transport enabled")
 	}
 
-	router := core.NewRouter(device, ip, network)
+	router := core.NewRouter(device, ip, network, config.Gateway)
 	self := &Server{router: router}
 
 	if config.TCPListen != "" {

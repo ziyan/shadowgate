@@ -7,6 +7,21 @@ repository tags.
 
 ## Unreleased
 
+## [0.1.4] - 2026-07-21
+
+### Added
+
+- Egress through a connected client. When the server reads a frame from its own
+  tun with no directly-connected client for the destination, it now consults the
+  host's own routing table (via netlink, honoring policy-routing rules and the
+  frame's source address) and forwards the frame to the client that is the host's
+  next hop toward that destination — so a route such as
+  `default via <client> dev <tun>` on the server makes its internet egress go out
+  through the client. Resolved next hops are cached briefly. Previously such a
+  frame was dropped because the raw IP packet does not carry the OS next hop.
+- `--gateway <client-tunnel-ip>` server flag, a fixed fallback: any frame the
+  host routing table has no next hop for is sent to that client.
+
 ## [0.1.3] - 2026-07-21
 
 ### Added
