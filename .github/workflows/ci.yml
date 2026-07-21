@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        run: |
+          mkdir -p coverage
+          go test -mod=vendor -coverprofile=coverage/coverage.out -covermode=atomic -count=1 -timeout=2m ./...
+
+      - name: Coverage report
+        run: go tool cover -func=coverage/coverage.out
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          VERSION=$(git describe --tags 2>/dev/null || echo 0.1.0)
+          COMMIT=$(git describe --match=NeVeRmAtCh --always --abbrev=40 --dirty)
+          LDFLAGS="-s -w -X github.com/ziyan/shadowgate/internal/version.version=${VERSION} -X github.com/ziyan/shadowgate/internal/version.commit=${COMMIT}"
+          go build -mod=vendor -ldflags "${LDFLAGS}" -o shadowgate-linux-${{ matrix.goarch }} ./command/
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: shadowgate-linux-${{ matrix.goarch }}
+          path: shadowgate-linux-*

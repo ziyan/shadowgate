@@ -1,0 +1,35 @@
+# Project-specific mulint configuration for shadowgate.
+# The Makefile's `lint-mulint` target points MULINT_CONFIG at this file.
+
+linters:
+  mulint_camelcase: true
+  mulint_naming: true
+  mulint_abbreviation: true
+  # Disabled: too noisy on loop indices and short-lived variables.
+  mulint_singleletter: false
+  mulint_errorprefix: true
+  mulint_log: true
+  mulint_recover: true
+  mulint_structtag: true
+
+reports:
+  maximumReportsPerLinter: 1000
+
+# When you add a new exception, add an explanation as well.
+extra:
+  acronyms:
+    # IPv4 header fields and crypto primitives used across the tunnel.
+    - IHL   # Internet Header Length
+    - DSCP  # Differentiated Services Code Point
+    - ECN   # Explicit Congestion Notification
+    - TTL   # Time To Live
+    - TUN   # TUN (network tunnel) virtual interface
+    - AES   # Advanced Encryption Standard
+    - HMAC  # Hash-based Message Authentication Code
+    - AEAD  # Authenticated Encryption with Associated Data
+    - EOF   # end of file (bufio.SplitFunc's atEOF parameter)
+    - TCP   # Transmission Control Protocol
+    - UDP   # User Datagram Protocol
+    - RTT   # round-trip time
+
+  logVariableName: log
