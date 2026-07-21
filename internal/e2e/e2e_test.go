@@ -128,6 +128,54 @@ func TestTCPOnlyServerClientFallsBack(t *testing.T) {
 	deliver(t, serverTun, clientTun, ipv4.MakeFrame(serverIP, clientIP))
 }
 
+func TestClientReconnectsAfterServerRestart(t *testing.T) {
+	password := []byte("shared-secret")
+	address := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+	serverAddress, serverNetwork := mustCIDR(t, "172.18.0.1/24")
+	clientAddress, clientNetwork := mustCIDR(t, "172.18.0.2/24")
+	config := server.Config{TCPListen: address, UDPListen: address, Password: password, Padding: 128, Timeout: time.Second}
+
+	startServer := func(device *tuntest.FakeTUN) (chan<- os.Signal, *sync.WaitGroup) {
+		runner, err := server.NewServer(device, serverAddress, serverNetwork, config)
+		if err != nil {
+			t.Fatalf("NewServer: %s", err)
+		}
+		signal := make(chan os.Signal, 1)
+		var group sync.WaitGroup
+		group.Add(1)
+		go func() { defer group.Done(); _ = runner.Run(signal) }()
+		return signal, &group
+	}
+
+	// First server generation.
+	firstTun := tuntest.New()
+	firstSignal, firstGroup := startServer(firstTun)
+
+	clientTun := tuntest.New()
+	clientRunner, err := client.NewClient(clientTun, clientAddress, clientNetwork, address, password, false, 128, time.Second)
+	if err != nil {
+		t.Fatalf("NewClient: %s", err)
+	}
+	clientSignal := make(chan os.Signal, 1)
+	var clientGroup sync.WaitGroup
+	clientGroup.Add(1)
+	go func() { defer clientGroup.Done(); _ = clientRunner.Run(clientSignal) }()
+	t.Cleanup(func() { close(clientSignal); clientGroup.Wait() })
+
+	deliver(t, clientTun, firstTun, ipv4.MakeFrame(clientIP, serverIP))
+
+	// Kill the server, then start a fresh one on the same address.
+	close(firstSignal)
+	firstGroup.Wait()
+
+	secondTun := tuntest.New()
+	secondSignal, secondGroup := startServer(secondTun)
+	t.Cleanup(func() { close(secondSignal); secondGroup.Wait() })
+
+	// The client must re-dial and deliver to the new server without a restart.
+	deliver(t, clientTun, secondTun, ipv4.MakeFrame(clientIP, serverIP))
+}
+
 func TestRouteThroughClient(t *testing.T) {
 	// A network (10.9.9.9) sits behind the client, which relays for it.
 	behindClient := net.ParseIP("10.9.9.9")

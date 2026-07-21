@@ -7,6 +7,26 @@ repository tags.
 
 ## Unreleased
 
+## [0.1.3] - 2026-07-21
+
+### Added
+
+- Automatic link reconnection. Each client link now re-dials its transport (with
+  exponential backoff) whenever it fails, so a server restart or transient
+  network drop self-heals instead of leaving the client stranded until it is
+  manually restarted.
+
+### Changed
+
+- Raised the link health timeout to 10s so an occasional burst of packet loss no
+  longer causes a needless transport failover; a link whose transport actually
+  fails is now marked unhealthy immediately, so real failover is not slowed.
+
+### Fixed
+
+- Split the TCP `EncryptedConnection`'s persisted error into separate send and
+  receive fields, removing a data race between the concurrent writer and reader.
+
 ## [0.1.2] - 2026-07-21
 
 ### Fixed

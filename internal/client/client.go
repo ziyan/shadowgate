@@ -5,7 +5,6 @@
 package client
 
 import (
-	"errors"
 	"net"
 	"os"
 	"sync"
@@ -44,27 +43,22 @@ type Client struct {
 	group     sync.WaitGroup
 }
 
-// NewClient opens the available transports to connect and tunnels over an
-// already-opened tun device. It tries both UDP and TCP; whichever connects
-// becomes a link, and the client adapts between them at runtime. It fails only
-// if no transport can be established.
+// NewClient tunnels over an already-opened tun device. It runs a UDP link and a
+// TCP link to the server, each of which keeps itself connected (re-dialing on
+// failure), and adapts between them at runtime. It fails only if the server
+// address is malformed.
 func NewClient(device tun.TUN, ip net.IP, network *net.IPNet, connect string, password []byte, useCompression bool, maxPadding int, timeout time.Duration) (*Client, error) {
-	var links []*link
-
-	if transport, err := dialUdp(connect, password, maxPadding, timeout); err != nil {
-		log.Warningf("udp transport unavailable: %s", err)
-	} else {
-		links = append(links, newLink(transport, ip))
+	if _, err := net.ResolveUDPAddr("udp", connect); err != nil {
+		return nil, err
 	}
 
-	if transport, err := dialTcp(connect, password, useCompression, timeout); err != nil {
-		log.Warningf("tcp transport unavailable: %s", err)
-	} else {
-		links = append(links, newLink(transport, ip))
-	}
-
-	if len(links) == 0 {
-		return nil, errors.New("client: no transport could connect")
+	links := []*link{
+		newLink("udp", func() (transport, error) {
+			return dialUdp(connect, password, maxPadding, timeout)
+		}, ip),
+		newLink("tcp", func() (transport, error) {
+			return dialTcp(connect, password, useCompression, timeout)
+		}, ip),
 	}
 
 	self := &Client{

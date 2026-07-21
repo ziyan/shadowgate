@@ -34,7 +34,11 @@ type EncryptedConnection struct {
 	recvPending []byte
 	recvStarted bool
 
-	err error
+	// sendErr and recvErr persist a fatal error per direction. They are split so
+	// the (single) writer goroutine and the (single) reader goroutine never touch
+	// the same field, which a shared error would make a data race.
+	sendErr error
+	recvErr error
 }
 
 // NewEncryptedConnection wraps conn. initiator must be true on the dialing end
@@ -49,19 +53,19 @@ func NewEncryptedConnection(conn io.ReadWriteCloser, password []byte, initiator 
 	}
 	masterKey, err := deriveMasterKey(password)
 	if err != nil {
-		self.err = err
+		self.sendErr, self.recvErr = err, err
 	}
 	self.masterKey = masterKey
 	return self
 }
 
 func (self *EncryptedConnection) Write(plaintext []byte) (int, error) {
-	if self.err != nil {
-		return 0, self.err
+	if self.sendErr != nil {
+		return 0, self.sendErr
 	}
 	if self.sendAead == nil {
 		if err := self.startSend(); err != nil {
-			self.err = err
+			self.sendErr = err
 			return 0, err
 		}
 	}
@@ -73,7 +77,7 @@ func (self *EncryptedConnection) Write(plaintext []byte) (int, error) {
 			chunk = chunk[:maxRecordSize]
 		}
 		if err := self.writeRecord(chunk); err != nil {
-			self.err = err
+			self.sendErr = err
 			return written, err
 		}
 		written += len(chunk)
@@ -123,19 +127,19 @@ func (self *EncryptedConnection) Read(buffer []byte) (int, error) {
 		self.recvPending = self.recvPending[size:]
 		return size, nil
 	}
-	if self.err != nil {
-		return 0, self.err
+	if self.recvErr != nil {
+		return 0, self.recvErr
 	}
 	if self.recvAead == nil {
 		if err := self.startRecv(); err != nil {
-			self.err = err
+			self.recvErr = err
 			return 0, err
 		}
 	}
 
 	plaintext, err := self.readRecord()
 	if err != nil {
-		self.err = err
+		self.recvErr = err
 		return 0, err
 	}
 
