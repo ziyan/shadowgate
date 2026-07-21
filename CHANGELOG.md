@@ -49,6 +49,11 @@ repository tags.
 
 ### Fixed
 
+- The routing table and the UDP peer table are size-bounded (per-client and
+  overall) so a single client sourcing many (possibly spoofed) addresses cannot
+  exhaust server memory; UDP peers are now keyed by socket address (one per
+  client) and `Unregister` no longer scans the whole table under the lock. The
+  transparent-forwarding trust model is documented in the README.
 - TCP record layer derives per-direction keys with role-bound HKDF labels, so an
   on-path attacker can no longer reflect a peer's own records back at it.
 - The server's return route to a client now follows whichever transport the

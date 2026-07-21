@@ -45,20 +45,19 @@ type Listener struct {
 }
 
 type udpPeer struct {
-	address       *net.UDPAddr
 	replay        obfuscate.ReplayWindow
 	sink          core.Sink
 	lastSeenNanos int64 // atomic; UnixNano of the last received datagram
 }
 
-// udpSink routes a frame toward one UDP peer by its tunnel address.
+// udpSink routes a frame toward one UDP client by its socket address.
 type udpSink struct {
 	listener *Listener
-	ip       string
+	address  *net.UDPAddr
 }
 
 func (self *udpSink) Send(frame ipv4.Frame) {
-	self.listener.sendTo(self.ip, frame)
+	self.listener.sendTo(self.address, frame)
 }
 
 func NewListener(router *core.Router, listen string, password []byte, maxPadding int) (*Listener, error) {
@@ -132,11 +131,11 @@ func (self *Listener) reap() {
 
 	var expired []core.Sink
 	self.mutex.Lock()
-	for ip, client := range self.peers {
+	for key, client := range self.peers {
 		if atomic.LoadInt64(&client.lastSeenNanos) < cutoff {
 			expired = append(expired, client.sink)
-			delete(self.peers, ip)
-			log.Infof("udp peer expired: %s", ip)
+			delete(self.peers, key)
+			log.Debugf("udp peer expired: %s", key)
 		}
 	}
 	self.mutex.Unlock()
@@ -174,60 +173,44 @@ func (self *Listener) readLoop() {
 			continue // a client must not claim the server's own address
 		}
 
-		client := self.peer(source.String())
+		client := self.peer(address)
 		if !client.replay.Accept(sequence) {
 			continue
 		}
-		self.setPeerAddress(source.String(), address)
 		atomic.StoreInt64(&client.lastSeenNanos, time.Now().UnixNano())
 
 		if source.Equal(frame.Destination()) {
 			// keepalive; keep a route available and reply
 			self.router.EnsureRoute(source, client.sink)
-			self.sendTo(source.String(), ipv4.MakeFrame(self.router.IP(), self.router.IP()))
+			self.sendTo(address, ipv4.MakeFrame(self.router.IP(), self.router.IP()))
 			continue
 		}
 
-		// a data frame: pin the return route to this (UDP) transport
+		// A data frame: learn a route back to its source (a network behind the
+		// client) via this client, then forward it.
 		self.router.Register(source, client.sink)
 		self.router.Inbound(frame.Copy())
 	}
 }
 
-// peer returns the peer for a tunnel address, creating it (and its sink) on
-// first sight. The route is not registered here; the read loop registers it per
+// peer returns the peer for a client socket address, creating it (and its sink)
+// on first sight. Keying by socket address bounds the peer table to the number
+// of connected clients, regardless of how many source addresses a client
+// forwards. The route is not registered here; the read loop registers it per
 // frame so the return path follows the client's active transport.
-func (self *Listener) peer(ip string) *udpPeer {
+func (self *Listener) peer(address *net.UDPAddr) *udpPeer {
+	key := address.String()
 	self.mutex.Lock()
 	defer self.mutex.Unlock()
-	existing, ok := self.peers[ip]
+	existing, ok := self.peers[key]
 	if !ok {
-		existing = &udpPeer{sink: &udpSink{listener: self, ip: ip}}
-		self.peers[ip] = existing
+		existing = &udpPeer{sink: &udpSink{listener: self, address: address}}
+		self.peers[key] = existing
 	}
 	return existing
 }
 
-func (self *Listener) setPeerAddress(ip string, address *net.UDPAddr) {
-	self.mutex.Lock()
-	defer self.mutex.Unlock()
-	if existing, ok := self.peers[ip]; ok {
-		existing.address = address
-	}
-}
-
-func (self *Listener) sendTo(ip string, frame ipv4.Frame) {
-	self.mutex.Lock()
-	existing, ok := self.peers[ip]
-	var address *net.UDPAddr
-	if ok {
-		address = existing.address
-	}
-	self.mutex.Unlock()
-	if address == nil {
-		return
-	}
-
+func (self *Listener) sendTo(address *net.UDPAddr, frame ipv4.Frame) {
 	sequence := atomic.AddUint64(&self.sequence, 1)
 	datagram, err := self.codec.Seal(sequence, 0, frame)
 	if err != nil {

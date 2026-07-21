@@ -159,6 +159,15 @@ docker run --rm -it \
 - shadowgate has not undergone a professional security review; it is not a
   substitute for a formally audited VPN such as WireGuard in adversarial
   environments.
+- **Transparent forwarding trusts every peer.** Because all peers share one
+  password, the server cannot tell them apart: any peer can source frames from,
+  and thus advertise a route for, any address (including one another's), and a
+  forwarding-enabled client relays whatever it is handed. Run shadowgate only
+  among mutually trusted machines, do not rely on tunnel source addresses for
+  access control on the server, and constrain a relay client with host firewall
+  rules. The routing table is size-bounded so a single peer cannot exhaust
+  server memory, but it cannot prevent a trusted peer from hijacking another's
+  route.
 
 ## Development
 

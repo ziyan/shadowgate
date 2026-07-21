@@ -80,6 +80,41 @@ func TestRouterRegisterEnsureUnregister(t *testing.T) {
 	}
 }
 
+func TestRouterBoundsRoutesPerSink(t *testing.T) {
+	device := tuntest.New()
+	serverIP := net.ParseIP("172.18.0.1")
+	_, network, _ := net.ParseCIDR("172.18.0.0/24")
+	router := NewRouter(device, serverIP, network)
+
+	// A single client that sources far more addresses than the cap must not grow
+	// the table past the per-sink limit.
+	sink := &recordingSink{}
+	for i := 0; i < maxRoutesPerSink+100; i++ {
+		router.Register(net.IPv4(10, byte(i>>16), byte(i>>8), byte(i)), sink)
+	}
+
+	router.mutex.Lock()
+	perSink := len(router.sinkKeys[sink])
+	total := len(router.routes)
+	router.mutex.Unlock()
+	if perSink != maxRoutesPerSink {
+		t.Errorf("sink holds %d routes, want cap %d", perSink, maxRoutesPerSink)
+	}
+	if total != maxRoutesPerSink {
+		t.Errorf("total routes %d, want %d", total, maxRoutesPerSink)
+	}
+
+	// Unregister must clear all of the sink's routes (and its index entry).
+	router.Unregister(sink)
+	router.mutex.Lock()
+	total = len(router.routes)
+	_, indexed := router.sinkKeys[sink]
+	router.mutex.Unlock()
+	if total != 0 || indexed {
+		t.Errorf("after Unregister: routes=%d indexed=%v, want 0/false", total, indexed)
+	}
+}
+
 func TestRouterDeliversLocal(t *testing.T) {
 	device := tuntest.New()
 	serverIP := net.ParseIP("172.18.0.1")

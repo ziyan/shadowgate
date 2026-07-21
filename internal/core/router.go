@@ -18,6 +18,16 @@ import (
 
 var log = logging.MustGetLogger("core")
 
+const (
+	// maxRoutesPerSink bounds how many destination routes a single client (sink)
+	// may install, so one client relaying (or spoofing) many source addresses
+	// cannot exhaust the routing table on its own.
+	maxRoutesPerSink = 1024
+
+	// maxRoutes bounds the total routing table size across all clients.
+	maxRoutes = 65536
+)
+
 // Sink delivers a frame toward a single peer. Implementations must not block
 // (drop the frame instead) so one slow or dead peer cannot stall routing.
 type Sink interface {
@@ -32,6 +42,9 @@ type Router struct {
 
 	mutex  sync.Mutex
 	routes map[string]Sink
+	// sinkKeys is the reverse index (sink -> its route keys), used to bound and
+	// unregister a sink's routes without scanning the whole table.
+	sinkKeys map[Sink]map[string]struct{}
 
 	toTun chan ipv4.Frame
 	done  chan struct{}
@@ -41,12 +54,13 @@ type Router struct {
 
 func NewRouter(device tun.TUN, ip net.IP, network *net.IPNet) *Router {
 	return &Router{
-		ip:      ip,
-		network: network,
-		device:  device,
-		routes:  make(map[string]Sink),
-		toTun:   make(chan ipv4.Frame, 1024),
-		done:    make(chan struct{}),
+		ip:       ip,
+		network:  network,
+		device:   device,
+		routes:   make(map[string]Sink),
+		sinkKeys: make(map[Sink]map[string]struct{}),
+		toTun:    make(chan ipv4.Frame, 1024),
+		done:     make(chan struct{}),
 	}
 }
 
@@ -90,17 +104,27 @@ func (self *Router) Stop() {
 // Register associates a tunnel address with the sink that reaches it, replacing
 // any existing route. Transports call this for every data frame received from a
 // client so the return path follows whichever transport the client is actively
-// using.
+// using. Because a client's frames may carry arbitrary (even spoofed) source
+// addresses, the number of routes is bounded per sink and overall so one client
+// cannot exhaust memory; excess routes are dropped.
 func (self *Router) Register(ip net.IP, sink Sink) {
 	self.mutex.Lock()
 	defer self.mutex.Unlock()
+
 	key := ip.String()
-	if existing, ok := self.routes[key]; !ok {
-		log.Infof("new route registered: %s", key)
-	} else if existing != sink {
-		log.Infof("route for %s moved to a different transport", key)
+	existing, present := self.routes[key]
+	if present && existing == sink {
+		return
 	}
-	self.routes[key] = sink
+	if !self.hasCapacity(sink, present) {
+		log.Debugf("route table full; dropping route for %s", key)
+		return
+	}
+	if present {
+		self.detach(existing, key)
+	}
+	self.attach(sink, key)
+	log.Debugf("route registered: %s", key)
 }
 
 // EnsureRoute associates a tunnel address with a sink only if no route exists
@@ -110,24 +134,60 @@ func (self *Router) Register(ip net.IP, sink Sink) {
 func (self *Router) EnsureRoute(ip net.IP, sink Sink) {
 	self.mutex.Lock()
 	defer self.mutex.Unlock()
+
 	key := ip.String()
 	if _, ok := self.routes[key]; ok {
 		return
 	}
-	log.Infof("new route registered: %s", key)
-	self.routes[key] = sink
+	if !self.hasCapacity(sink, false) {
+		return
+	}
+	self.attach(sink, key)
+	log.Debugf("route registered: %s", key)
 }
 
-// Unregister removes every route pointing at the given sink.
+// hasCapacity reports whether a route may be added for sink. movingKey is true
+// when an existing route key is being moved to sink (so the global total does
+// not grow).
+func (self *Router) hasCapacity(sink Sink, movingKey bool) bool {
+	if len(self.sinkKeys[sink]) >= maxRoutesPerSink {
+		return false
+	}
+	if !movingKey && len(self.routes) >= maxRoutes {
+		return false
+	}
+	return true
+}
+
+func (self *Router) attach(sink Sink, key string) {
+	self.routes[key] = sink
+	keys := self.sinkKeys[sink]
+	if keys == nil {
+		keys = make(map[string]struct{})
+		self.sinkKeys[sink] = keys
+	}
+	keys[key] = struct{}{}
+}
+
+func (self *Router) detach(sink Sink, key string) {
+	if keys := self.sinkKeys[sink]; keys != nil {
+		delete(keys, key)
+		if len(keys) == 0 {
+			delete(self.sinkKeys, sink)
+		}
+	}
+}
+
+// Unregister removes every route pointing at the given sink. It is O(routes for
+// this sink), not a full-table scan, so a disconnecting client cannot stall the
+// router while holding the lock.
 func (self *Router) Unregister(sink Sink) {
 	self.mutex.Lock()
 	defer self.mutex.Unlock()
-	for key, existing := range self.routes {
-		if existing == sink {
-			log.Infof("old route removed: %s", key)
-			delete(self.routes, key)
-		}
+	for key := range self.sinkKeys[sink] {
+		delete(self.routes, key)
 	}
+	delete(self.sinkKeys, sink)
 }
 
 func (self *Router) sink(ip string) (Sink, bool) {
