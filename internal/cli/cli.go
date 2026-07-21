@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"time"
 
 	"github.com/op/go-logging"
@@ -36,6 +37,7 @@ func commonFlags() []cli.Flag {
 		&cli.StringFlag{Name: "timeout", Value: "2s", Usage: "network operation timeout"},
 		&cli.BoolFlag{Name: "compress", Usage: "tcp: Snappy-compress the stream (off by default)"},
 		&cli.IntFlag{Name: "padding", Value: 256, Usage: "udp: maximum random padding bytes per datagram (0 disables)"},
+		&cli.IntFlag{Name: "mtu", Value: 0, Usage: "tun interface MTU (0 = kernel default); lower it to keep UDP datagrams under the path MTU and avoid fragmentation"},
 	}
 }
 
@@ -101,7 +103,7 @@ func serverCommand() *cli.Command {
 				log.Errorf("failed to start server: %s", err)
 				return err
 			}
-			return runTunnel(runner, ip, network)
+			return runTunnel(runner, ip, network, command.Int("mtu"))
 		},
 	}
 }
@@ -125,7 +127,7 @@ func clientCommand() *cli.Command {
 				log.Errorf("failed to start client: %s", err)
 				return err
 			}
-			return runTunnel(runner, ip, network)
+			return runTunnel(runner, ip, network, command.Int("mtu"))
 		},
 	}
 }
@@ -181,25 +183,30 @@ func newClient(command *cli.Command, ip net.IP, network *net.IPNet, timeout time
 }
 
 // runTunnel configures the interface and runs the tunnel until interrupted.
-func runTunnel(runner tunnel, ip net.IP, network *net.IPNet) error {
+func runTunnel(runner tunnel, ip net.IP, network *net.IPNet, mtu int) error {
 	defer func() {
 		if err := runner.Close(); err != nil {
 			log.Debugf("failed to close cleanly: %s", err)
 		}
 	}()
 
-	configureInterface(runner.Interface(), ip, network)
+	configureInterface(runner.Interface(), ip, network, mtu)
 
 	return runner.Run(interruptChannel())
 }
 
-// configureInterface assigns the tunnel address to the given interface and
-// brings it up. Failures are logged but not fatal so that the tunnel still runs
-// when the interface was configured out of band.
-func configureInterface(name string, ip net.IP, network *net.IPNet) {
+// configureInterface assigns the tunnel address to the given interface, sets its
+// MTU when one is requested, and brings it up. Failures are logged but not fatal
+// so that the tunnel still runs when the interface was configured out of band.
+func configureInterface(name string, ip net.IP, network *net.IPNet, mtu int) {
 	address := &net.IPNet{IP: ip, Mask: network.Mask}
 	if err := exec.Command("ip", "addr", "add", address.String(), "dev", name).Run(); err != nil {
 		log.Warningf("failed to set addr on interface %s: %s", name, err)
+	}
+	if mtu > 0 {
+		if err := exec.Command("ip", "link", "set", "dev", name, "mtu", strconv.Itoa(mtu)).Run(); err != nil {
+			log.Warningf("failed to set mtu on interface %s: %s", name, err)
+		}
 	}
 	if err := exec.Command("ip", "link", "set", "dev", name, "up").Run(); err != nil {
 		log.Warningf("failed to bring up interface %s: %s", name, err)

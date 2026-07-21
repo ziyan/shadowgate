@@ -7,6 +7,15 @@ repository tags.
 
 ## Unreleased
 
+## [0.1.1] - 2026-07-21
+
+### Added
+
+- `--mtu` flag to set the tun interface MTU. Lower it (e.g. `--mtu 1150`) so a
+  full-size tunnel packet plus the UDP transport's per-datagram overhead
+  (~54 bytes + padding) stays under the path MTU and does not fragment — without
+  it, large downloads over UDP on a constrained path can stall.
+
 ## [0.1.0] - 2026-07-21
 
 ### Added

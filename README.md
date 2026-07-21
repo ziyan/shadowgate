@@ -124,6 +124,7 @@ Global:
 | `--password`             | *(empty)*                         | Shared secret used to derive the session keys   |
 | `--compress`             | `false`                           | TCP: Snappy-compress the stream                 |
 | `--padding`              | `256`                             | UDP: max random padding bytes per datagram      |
+| `--mtu`                  | `0` (kernel default)              | TUN interface MTU; lower it to avoid UDP fragmentation |
 | `--ifname`               | *(kernel-assigned)*               | TUN interface name to create                    |
 | `--persist`              | `false`                           | Keep the TUN interface after exit               |
 | `--timeout`              | `2s`                              | Dial / network operation timeout                |
@@ -138,6 +139,11 @@ protocol by content or by a fixed packet size. This defends against **passive**
 DPI; it does not attempt to defeat active probing (which would require mimicking
 a real protocol such as HTTPS), and a censor doing entropy analysis may still
 flag uniformly-random UDP.
+
+Because each datagram adds ~54 bytes of AEAD overhead plus up to `--padding`
+bytes, a full-size (1500-byte) tunnel packet can exceed the path MTU and
+fragment. Set `--mtu` below `path-MTU − 54 − padding` (for example `--mtu 1150`
+with the default padding on a 1500-byte path) so datagrams fit in one packet.
 
 ### Running in Docker
 
