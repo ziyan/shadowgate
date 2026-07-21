@@ -21,14 +21,14 @@ import (
 
 var log = logging.MustGetLogger("client")
 
-// switchNumerator/switchDenominator define the hysteresis margin: the client
-// only switches to a different healthy link when its round-trip time is at least
-// this much lower than the current link's, avoiding per-frame flapping (and the
-// packet reordering it would cause) when two links have similar latency.
-const (
-	switchNumerator   = 4
-	switchDenominator = 5
-)
+// latencySwitchFactor is the hysteresis margin for switching between two
+// *healthy* links purely for latency: the client stays on its current link
+// unless another is faster by this factor (its smoothed RTT is less than the
+// current link's divided by the factor). This — together with RTT smoothing —
+// keeps the client from flapping when both links have similar latency, which
+// would re-pin the server's return route mid-flow and cause heavy packet loss.
+// A failed (unhealthy) link always triggers a switch regardless of this margin.
+const latencySwitchFactor = 2
 
 type Client struct {
 	ip    net.IP
@@ -190,7 +190,7 @@ func (self *Client) reselect() {
 		switch {
 		case current == nil || !current.healthy():
 			self.setActive(best)
-		case best != current && best.rtt() < current.rtt()*switchNumerator/switchDenominator:
+		case best != current && best.rtt()*latencySwitchFactor < current.rtt():
 			self.setActive(best)
 		}
 		return

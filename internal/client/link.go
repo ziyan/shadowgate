@@ -19,6 +19,10 @@ const (
 
 	// unknownRtt is reported by a link that has not yet measured a round trip.
 	unknownRtt = time.Hour
+
+	// rttSmoothingShift sets the EWMA weight for round-trip samples: the estimate
+	// keeps 1 - 1/2^shift of the old value and 1/2^shift of the new sample.
+	rttSmoothingShift = 3 // alpha = 1/8
 )
 
 // link wraps a transport with keepalive probing and health/latency tracking.
@@ -97,13 +101,25 @@ func (self *link) healthy() bool {
 	return self.now().UnixNano()-last < int64(healthTimeout)
 }
 
-// rtt returns the last measured round-trip time, or unknownRtt if none.
+// rtt returns the smoothed round-trip time, or unknownRtt if none measured yet.
 func (self *link) rtt() time.Duration {
 	value := atomic.LoadInt64(&self.rttNanos)
 	if value == 0 {
 		return unknownRtt
 	}
 	return time.Duration(value)
+}
+
+// recordRtt folds a new round-trip sample into an exponential moving average so
+// per-sample jitter does not make transport selection flap. Only the receive
+// loop calls this, so the load/store is free of a competing writer.
+func (self *link) recordRtt(sample int64) {
+	previous := atomic.LoadInt64(&self.rttNanos)
+	if previous == 0 {
+		atomic.StoreInt64(&self.rttNanos, sample)
+		return
+	}
+	atomic.StoreInt64(&self.rttNanos, previous-(previous>>rttSmoothingShift)+(sample>>rttSmoothingShift))
 }
 
 // lastReply returns the UnixNano timestamp of the last keepalive reply, or 0.
@@ -160,11 +176,11 @@ func (self *link) receiveLoop() {
 		}
 
 		if frame.Source().Equal(frame.Destination()) {
-			// keepalive reply from the server: measure round-trip time
+			// keepalive reply from the server: update the smoothed round-trip time
 			ping := atomic.LoadInt64(&self.lastPingNanos)
 			now := self.now().UnixNano()
 			if ping != 0 && now >= ping {
-				atomic.StoreInt64(&self.rttNanos, now-ping)
+				self.recordRtt(now - ping)
 			}
 			atomic.StoreInt64(&self.lastReplyNanos, now)
 			continue

@@ -7,6 +7,18 @@ repository tags.
 
 ## Unreleased
 
+## [0.1.2] - 2026-07-21
+
+### Fixed
+
+- Stabilized the client's adaptive transport selection. Round-trip time is now
+  an exponential moving average, and the client only switches between two healthy
+  links when one is faster by a large margin (2x) rather than 20%. Previously,
+  jitter in per-sample RTT made the client flap between TCP and UDP every few
+  seconds, which re-pinned the server's return route mid-flow and caused heavy
+  packet loss in the server-to-client direction (a health failure still triggers
+  an immediate switch).
+
 ## [0.1.1] - 2026-07-21
 
 ### Added
