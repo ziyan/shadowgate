@@ -21,10 +21,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -65,7 +65,7 @@ jobs:
           echo "asset=${fileBasename}.tar.gz" >> "$GITHUB_OUTPUT"
 
       - name: Upload release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-linux-${{ matrix.goarch }}
           path: ${{ steps.package.outputs.asset }}
@@ -76,10 +76,10 @@ jobs:
     needs: build
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-artifacts
           pattern: release-*
@@ -135,7 +135,7 @@ jobs:
           echo "bodyFile=$bodyFile" >> "$GITHUB_OUTPUT"
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             release-artifacts/*
