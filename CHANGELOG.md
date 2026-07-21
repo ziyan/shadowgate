@@ -7,6 +7,8 @@ repository tags.
 
 ## Unreleased
 
+## [0.1.0] - 2026-07-21
+
 ### Added
 
 - Dual transport, always on: the server listens on TCP and UDP simultaneously on
